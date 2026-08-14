@@ -199,7 +199,7 @@ class TrayApp:
         logger.info("[ConfigUI] Current config.properties keys: %s", 
                      list(self.watchdog.config.properties.keys()))
             
-        dialog = ConfigDialog(wp_id, self.watchdog.config, self.tray.parentWidget())
+        dialog = ConfigDialog(wp_id, self.watchdog.config, None)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             # Log what was saved
             saved_props = self.watchdog.config.properties.get(wp_id, {})

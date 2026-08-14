@@ -143,6 +143,10 @@ class WallpaperLauncher:
 
         if self.config.silent:
             cmd.append("--silent")
+
+        # Wayland layer: 'background' sits BELOW KDE Plasma desktop icons.
+        # Default 'bottom' layer would cover desktop icons and block right-click.
+        cmd.extend(["--layer", "background"])
             
         # ── Wallpaper property overrides ─────────────────────────────
         # --set-property expects a SINGLE string: "key=value"
