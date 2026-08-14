@@ -1,0 +1,23 @@
+[Unit]
+Description=Wallpaper Engine Manager (Background Service)
+# Start only after the desktop environment (KDE/Wayland) is ready
+After=graphical-session.target
+
+[Service]
+Type=simple
+# Path to the project directory
+WorkingDirectory=/home/arghadeep/Projects/WallpaperEnginePlugin
+# Command to run
+ExecStart=/usr/bin/python3 -m wallpaper_manager.main
+
+# If the Python script itself crashes (our watchdog handles subprocess crashes,
+# but this handles the main script crashing), restart it.
+Restart=on-failure
+RestartSec=5
+
+# Standard output and error will go to journalctl
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

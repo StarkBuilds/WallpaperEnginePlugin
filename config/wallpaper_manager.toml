@@ -1,0 +1,74 @@
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║                     Wallpaper Manager Configuration                     ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+#
+# Copy this file to:  ~/.config/wallpaper_manager.toml
+# Then edit the values below to match your setup.
+
+# ── Core Settings ────────────────────────────────────────────────────────
+
+# Path to the linux-wallpaperengine binary.
+# If installed via `yay -S linux-wallpaperengine-git`, it's on your $PATH
+# and you can just use the name.  Otherwise, give an absolute path.
+binary = "linux-wallpaperengine"
+
+# Path to the Wallpaper Engine assets folder (shaders, textures, etc.).
+# linux-wallpaperengine needs this to render any wallpaper.
+#
+# AUTO-DETECTED: Leave empty ("") and the manager will scan these locations:
+#   ~/.local/share/Steam/steamapps/common/wallpaper_engine/assets
+#   ~/.var/app/com.valvesoftware.Steam/.../wallpaper_engine/assets
+#   /run/media/<user>/<drive>/Program Files (x86)/Steam/.../assets
+#
+# Set this explicitly only if auto-detection fails:
+# assets_dir = "/run/media/arghadeep/Windows/Program Files (x86)/Steam/steamapps/common/wallpaper_engine/assets"
+assets_dir = ""
+
+# Full path to the Workshop content folder (the 431960/ directory).
+# Each subfolder is a wallpaper identified by its Workshop ID.
+#
+# AUTO-DETECTED: Leave empty ("") and the manager will scan the same
+# locations as assets_dir, looking for steamapps/workshop/content/431960/.
+#
+# Set this explicitly only if auto-detection fails:
+# workshop_dir = "/run/media/arghadeep/Windows/Program Files (x86)/Steam/steamapps/workshop/content/431960"
+workshop_dir = ""
+
+# Which wallpaper to display.
+# Can be a numeric Workshop ID (e.g. "1845706469") — will be resolved
+# relative to workshop_dir above.
+# Or an absolute path to a wallpaper folder.
+wallpaper = ""
+
+# Scaling mode: "fill", "stretch", "fit", "default", or "" (auto).
+# "fill" is usually what you want — it covers the screen without distortion.
+scaling = "fill"
+
+# Target a specific monitor by name (e.g. "HDMI-A-1", "DP-1").
+# Leave empty to apply to all screens.
+# Find your screen name with: kscreen-doctor -o
+screen = ""
+
+
+# ── NTFS Drive Settings ─────────────────────────────────────────────────
+# Used by the auto-mount feature (Stage 2).
+
+[drive]
+# UUID of the NTFS partition containing your wallpapers.
+# This is a stable identifier — unlike /dev/nvme0n1p3, it won't change
+# between boots.
+# Find it with: lsblk -o NAME,FSTYPE,UUID
+uuid = "165A5F9D5A5F7887"
+
+
+# ── Crash Resilience ─────────────────────────────────────────────────────
+# Controls automatic restart behavior (Stage 3).
+
+[resilience]
+# Maximum consecutive restart attempts before giving up.
+# If the wallpaper crashes 5 times in a row without running for at least
+# 60 seconds, we stop trying (it's probably a broken wallpaper).
+max_retries = 5
+
+# Seconds to wait between restart attempts.
+retry_delay_seconds = 3
