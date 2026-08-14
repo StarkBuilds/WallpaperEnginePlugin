@@ -174,7 +174,7 @@ def main() -> None:
             sys.exit(1)
         except MountError as e:
             logger.error("Failed to mount drive: %s", e)
-            sys.exit(1)
+            sys.exit(0)  # Exit 0 so systemd doesn't infinite loop if user cancels polkit
     elif paths_already_resolved:
         logger.info(
             "Steam paths already accessible — skipping drive mount step."

@@ -10,10 +10,13 @@ import os
 import signal
 from pathlib import Path
 
-# We import PyQt6 components
-from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
-from PyQt6.QtGui import QIcon, QAction
-from PyQt6.QtCore import QTimer
+from PyQt6.QtWidgets import (
+    QApplication, QSystemTrayIcon, QMenu, QDialog, QVBoxLayout, QHBoxLayout,
+    QLabel, QPushButton, QCheckBox, QComboBox, QLineEdit, QColorDialog, 
+    QScrollArea, QWidget, QFormLayout, QFrame
+)
+from PyQt6.QtGui import QIcon, QAction, QColor
+from PyQt6.QtCore import QTimer, Qt
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +91,10 @@ class TrayApp:
         self.next_action = QAction("Next Wallpaper")
         self.next_action.triggered.connect(self.next_wallpaper)
         self.menu.addAction(self.next_action)
+        
+        self.config_action = QAction("Configure Wallpaper...")
+        self.config_action.triggered.connect(self.open_config)
+        self.menu.addAction(self.config_action)
         
         self.menu.addSeparator()
         
@@ -181,10 +188,246 @@ class TrayApp:
         logger.info("Next wallpaper triggered: switching to %s", next_id)
         self.watchdog.switch_wallpaper(next_id)
         
+    def open_config(self):
+        """Open the configuration window for the current wallpaper."""
+        wp_id = self.watchdog.config.wallpaper
+        if not wp_id:
+            logger.warning("No wallpaper currently selected to configure.")
+            return
+        
+        logger.info("[ConfigUI] Opening config for wallpaper ID: %s", wp_id)
+        logger.info("[ConfigUI] Current config.properties keys: %s", 
+                     list(self.watchdog.config.properties.keys()))
+            
+        dialog = ConfigDialog(wp_id, self.watchdog.config, self.tray.parentWidget())
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            # Log what was saved
+            saved_props = self.watchdog.config.properties.get(wp_id, {})
+            logger.info("[ConfigUI] Properties saved for %s: %s", wp_id, saved_props)
+            
+            # Save the new properties to disk
+            from wallpaper_manager.config import save_config
+            save_config(self.watchdog.config)
+            
+            # Restart with the SAME wallpaper ID that was configured
+            logger.info("[ConfigUI] Restarting wallpaper %s with new properties", wp_id)
+            self.watchdog.switch_wallpaper(wp_id)
+        else:
+            logger.info("[ConfigUI] Config dialog cancelled for %s", wp_id)
+
     def quit_app(self):
         """Triggered from the tray menu to cleanly shut down."""
         logger.info("Quit requested from tray menu.")
         self.app.quit()
+
+
+class ConfigDialog(QDialog):
+    """Dynamic properties configuration window."""
+    def __init__(self, wp_id: str, config, parent=None):
+        super().__init__(parent)
+        self.wp_id = wp_id
+        self.config = config
+        self.setWindowTitle("Configure Wallpaper")
+        self.resize(400, 500)
+        
+        # Make it stay on top so it doesn't get lost
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
+        
+        self.layout = QVBoxLayout(self)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.layout.addWidget(self.scroll)
+        
+        self.content_widget = QWidget()
+        self.form_layout = QFormLayout(self.content_widget)
+        self.scroll.setWidget(self.content_widget)
+        
+        self.inputs = {}
+        
+        self._load_properties()
+        
+        # Buttons
+        btn_layout = QHBoxLayout()
+        save_btn = QPushButton("Apply")
+        save_btn.clicked.connect(self._save_and_accept)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        
+        btn_layout.addStretch()
+        btn_layout.addWidget(cancel_btn)
+        btn_layout.addWidget(save_btn)
+        self.layout.addLayout(btn_layout)
+
+    def _load_properties(self):
+        """
+        Load wallpaper properties using `--list-properties` as the primary source
+        of truth. Falls back to project.json for combo option labels and ordering.
+        """
+        import subprocess as sp
+        import re
+        
+        wp_dir = Path(self.config.workshop_dir) / self.wp_id
+        
+        # ── Step 1: Run --list-properties to get the real property keys/types ──
+        cmd = [self.config.binary]
+        if self.config.assets_dir:
+            cmd.extend(["--assets-dir", self.config.assets_dir])
+        cmd.extend(["--list-properties", str(wp_dir)])
+        
+        logger.info("[ConfigUI] Running: %s", " ".join(cmd))
+        
+        try:
+            result = sp.run(cmd, capture_output=True, text=True, timeout=5)
+            raw_output = result.stdout
+        except Exception as e:
+            logger.error("[ConfigUI] --list-properties failed: %s", e)
+            self.form_layout.addRow(QLabel(f"Failed to query properties: {e}"))
+            return
+        
+        if not raw_output.strip():
+            self.form_layout.addRow(QLabel("No properties available for this wallpaper."))
+            return
+        
+        # ── Step 2: Parse the --list-properties output ───────────────
+        # Format:
+        #   propertyname - type
+        #       Text: Human Label
+        #       Value: default_value
+        #   Values:             (only for combo)
+        #           0 = Label
+        #           1 = Label
+        props = {}
+        current_key = None
+        
+        for line in raw_output.splitlines():
+            # Skip the "Running with:" and "Using wallpaper engine's assets" lines
+            if line.startswith("Running with:") or line.startswith("Using wallpaper"):
+                continue
+                
+            # Property header: "backgroundcolor - color"
+            header_match = re.match(r'^(\w+)\s*-\s*(\w+)', line)
+            if header_match:
+                current_key = header_match.group(1)
+                prop_type = header_match.group(2)
+                props[current_key] = {"type": prop_type, "text": current_key, "value": "", "options": []}
+                continue
+            
+            if current_key is None:
+                continue
+                
+            stripped = line.strip()
+            
+            # Text line
+            if stripped.startswith("Text:"):
+                props[current_key]["text"] = stripped[len("Text:"):].strip()
+            # Value line
+            elif stripped.startswith("Value:"):
+                val_str = stripped[len("Value:"):].strip()
+                props[current_key]["value"] = val_str
+            # Combo option: "0 = Visualizer Mode"
+            elif "=" in stripped and props[current_key]["type"] == "combo":
+                parts = stripped.split("=", 1)
+                if len(parts) == 2:
+                    opt_val = parts[0].strip()
+                    opt_label = parts[1].strip()
+                    props[current_key]["options"].append({"value": opt_val, "label": opt_label})
+        
+        logger.info("[ConfigUI] Parsed %d properties from --list-properties", len(props))
+        
+        # ── Step 3: Get user's saved overrides ───────────────────────
+        saved_props = self.config.properties.get(self.wp_id, {})
+        
+        # ── Step 4: Build the UI widgets ─────────────────────────────
+        for key, prop in props.items():
+            prop_type = prop["type"]
+            text = prop["text"]
+            default_val = prop["value"]
+            
+            # Apply user's saved override if it exists
+            current_val = saved_props.get(key, default_val)
+            
+            widget = None
+            
+            if prop_type == "boolean":
+                widget = QCheckBox()
+                is_checked = str(current_val).strip() in ("1", "true", "True")
+                widget.setChecked(is_checked)
+                self.inputs[key] = lambda w=widget: "1" if w.isChecked() else "0"
+                
+            elif prop_type == "textinput":
+                widget = QLineEdit()
+                widget.setText(str(current_val))
+                self.inputs[key] = lambda w=widget: w.text()
+                
+            elif prop_type == "combo":
+                widget = QComboBox()
+                for opt in prop.get("options", []):
+                    widget.addItem(opt.get("label", ""), opt.get("value", ""))
+                idx = widget.findData(str(current_val))
+                if idx >= 0:
+                    widget.setCurrentIndex(idx)
+                self.inputs[key] = lambda w=widget: w.currentData()
+                
+            elif prop_type == "color":
+                widget = QPushButton()
+                try:
+                    # --list-properties outputs "R, G, B, A" with commas
+                    parts = [float(x.strip().rstrip(',')) for x in str(current_val).replace(',', ' ').split()]
+                    r = int(parts[0] * 255) if len(parts) > 0 else 0
+                    g = int(parts[1] * 255) if len(parts) > 1 else 0
+                    b = int(parts[2] * 255) if len(parts) > 2 else 0
+                    color = QColor(r, g, b)
+                except Exception:
+                    color = QColor(255, 255, 255)
+                    
+                self._update_color_btn(widget, color)
+                
+                # Store the WE-format string for serialization
+                # Convert from comma format to space format for --set-property
+                try:
+                    parts = [float(x.strip().rstrip(',')) for x in str(current_val).replace(',', ' ').split()]
+                    widget._we_color_string = " ".join(f"{p:.5f}" for p in parts[:3])
+                except Exception:
+                    widget._we_color_string = str(current_val)
+                
+                widget.clicked.connect(lambda checked, btn=widget, c=color: self._pick_color(btn, c))
+                self.inputs[key] = lambda w=widget: w._we_color_string
+                
+            else:
+                widget = QLineEdit()
+                widget.setText(str(current_val))
+                self.inputs[key] = lambda w=widget: w.text()
+                
+            if widget:
+                self.form_layout.addRow(text, widget)
+
+    def _update_color_btn(self, btn: QPushButton, color: QColor):
+        """Update the button's background color."""
+        btn.setStyleSheet(f"background-color: {color.name()}; border: 1px solid #555; border-radius: 4px; min-height: 24px;")
+
+    def _pick_color(self, btn: QPushButton, initial: QColor):
+        color = QColorDialog.getColor(initial, self, "Pick Color")
+        if color.isValid():
+            self._update_color_btn(btn, color)
+            # Wallpaper Engine format: "R G B" (0.0 - 1.0)
+            we_format = f"{color.redF():.5f} {color.greenF():.5f} {color.blueF():.5f}"
+            btn._we_color_string = we_format
+            
+    def _save_and_accept(self):
+        """Read all inputs and save to config dict."""
+        props = {}
+        for key, getter in self.inputs.items():
+            val = getter()
+            props[key] = str(val)  # Ensure everything is a string for TOML
+            
+        logger.info("[ConfigUI] Saving properties for %s: %s", self.wp_id, props)
+            
+        if self.wp_id not in self.config.properties:
+            self.config.properties[self.wp_id] = {}
+            
+        self.config.properties[self.wp_id].update(props)
+        self.accept()
+
 
 def run_gui(watchdog) -> None:
     """

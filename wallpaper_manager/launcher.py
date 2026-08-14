@@ -86,7 +86,7 @@ class WallpaperLauncher:
                 logger.warning("Wallpaper path does not exist: %s", resolved)
             return str(resolved)
 
-    def _build_command(self) -> list[str]:
+    def _build_command(self, wallpaper_override: str | None = None) -> list[str]:
         """
         Build the command-line arguments list.
 
@@ -98,12 +98,13 @@ class WallpaperLauncher:
             --bg <id_or_path>      Set the background for a screen
             --scaling <mode>       fill / stretch / fit / default
             --assets-dir <path>    Custom path for WE assets
+            --set-property K=V     Override a wallpaper property
 
-        For a simple single-monitor setup:
-            linux-wallpaperengine <path_to_wallpaper>
-
-        For multi-monitor with screen targeting:
-            linux-wallpaperengine --screen-root HDMI-A-1 --bg <path>
+        Parameters
+        ----------
+        wallpaper_override : str | None
+            If provided, use this wallpaper ID/path instead of config.wallpaper.
+            Used when switch_wallpaper updates the config mid-flight.
         """
         # Verify the binary exists and is executable
         binary = self.config.binary
@@ -123,26 +124,46 @@ class WallpaperLauncher:
                 f"Check its permissions with: ls -l '{binary}'"
             )
 
+        # Use override or resolve from config
+        if wallpaper_override:
+            self.config.wallpaper = wallpaper_override
         wallpaper_path = self._resolve_wallpaper_path()
+        
+        # The wallpaper folder name is the workshop ID
+        wp_id = Path(wallpaper_path).name
 
         cmd = [binary]
 
-        # Pass --assets-dir if configured.
+        # ── Global options (before screen targeting) ─────────────────
         if self.config.assets_dir:
             cmd.extend(["--assets-dir", self.config.assets_dir])
+            
+        if self.config.fps:
+            cmd.extend(["--fps", str(self.config.fps)])
+
+        if self.config.silent:
+            cmd.append("--silent")
+            
+        # ── Wallpaper property overrides ─────────────────────────────
+        # --set-property expects a SINGLE string: "key=value"
+        # For color values with spaces like "0 0 0", the entire "key=0 0 0"
+        # must be ONE element in the subprocess args list.
+        wp_props = self.config.properties.get(wp_id, {})
+        for key, val in wp_props.items():
+            prop_str = f"{key}={val}"
+            cmd.extend(["--set-property", prop_str])
+            logger.debug("  property override: --set-property %s", prop_str)
 
         # ── Screen Targeting ─────────────────────────────────────────
         # linux-wallpaperengine opens as a floating window unless we specify
-        # --screen-root (or --screen-span). We want it to be a desktop background!
+        # --screen-root (or --screen-span). We want it as a desktop background!
         screens_to_target = []
         
         if self.config.screen:
-            # User explicitly configured a screen (e.g. "HDMI-A-1")
             screens_to_target = [self.config.screen]
         else:
             # Auto-detect screens using kscreen-doctor (KDE Plasma standard)
             try:
-                import subprocess
                 import re
                 res = subprocess.run(
                     ["kscreen-doctor", "-o"], 
@@ -155,7 +176,6 @@ class WallpaperLauncher:
                 
                 for line in clean_output.splitlines():
                     if line.startswith("Output:"):
-                        # Example: "Output: 1 eDP-1 4a4f777e-..."
                         parts = line.split()
                         if len(parts) >= 3:
                             screens_to_target.append(parts[2])
@@ -163,21 +183,28 @@ class WallpaperLauncher:
                 logger.warning("Failed to auto-detect screens with kscreen-doctor: %s", e)
 
         if screens_to_target:
-            # Apply to all detected/configured screens
             for screen in screens_to_target:
                 cmd.extend(["--screen-root", screen])
                 if self.config.scaling:
                     cmd.extend(["--scaling", self.config.scaling])
                 cmd.extend(["--bg", wallpaper_path])
         else:
-            # Fallback: No screen specified and auto-detect failed.
-            # It will open as a floating preview window.
             logger.warning("No screens detected! linux-wallpaperengine will open as a window.")
             if self.config.scaling:
                 cmd.extend(["--scaling", self.config.scaling])
             cmd.append(wallpaper_path)
 
         return cmd
+
+    def _build_env(self) -> dict[str, str]:
+        """Build environment variables for the subprocess."""
+        env = os.environ.copy()
+        
+        if self.config.disable_gl_threaded_optimizations:
+            env["__GL_THREADED_OPTIMIZATIONS"] = "0"
+            logger.info("Set __GL_THREADED_OPTIMIZATIONS=0 (OpenGL glitch workaround)")
+            
+        return env
 
     def start(self) -> None:
         """
@@ -195,23 +222,20 @@ class WallpaperLauncher:
             return
 
         cmd = self._build_command()
+        env = self._build_env()
+        
+        # BUG 1 FIX: Log the EXACT subprocess argument list for debugging.
+        # This lets us verify each argument is a separate, correct element.
         logger.info("Starting wallpaper engine: %s", " ".join(cmd))
+        logger.debug("Subprocess argv (raw list): %r", cmd)
 
         try:
-            # subprocess.Popen starts the process immediately and returns.
-            #
-            # - stdout/stderr=subprocess.PIPE captures the output so we can
-            #   log it.  Without this, it would go to our own stdout/stderr.
-            #
-            # - preexec_fn=os.setsid puts the child in a new "session" (process
-            #   group).  This ensures that when we send SIGTERM, it goes to the
-            #   wallpaper engine and all its children, not just the parent.
-            #   Think of it like creating a new thread group in Java.
             self._process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,  # merge stderr into stdout
                 preexec_fn=os.setsid,
+                env=env,
             )
             logger.info(
                 "Wallpaper engine started with PID %d.", self._process.pid

@@ -1,1 +1,2 @@
 .mypy_cache/\n__pycache__/\n*.log\n*.toml\n!wallpaper_manager.toml\n.vscode/\n
+__pycache__/

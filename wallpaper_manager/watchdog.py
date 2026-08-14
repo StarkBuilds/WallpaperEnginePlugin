@@ -162,7 +162,14 @@ class Watchdog:
         Uses a lock and flag to prevent the monitor loop from thinking the
         process crashed while we're intentionally stopping it.
         """
-        logger.info("Switching wallpaper to: %s", new_wallpaper)
+        logger.info("[Switch] Switching wallpaper: %s → %s", self.config.wallpaper, new_wallpaper)
+        
+        # Log properties that will be applied to the new wallpaper
+        wp_props = self.config.properties.get(new_wallpaper, {})
+        if wp_props:
+            logger.info("[Switch] Properties for %s: %s", new_wallpaper, wp_props)
+        else:
+            logger.info("[Switch] No custom properties for %s", new_wallpaper)
         
         with self._switching_lock:
             self._is_switching = True
@@ -171,6 +178,7 @@ class Watchdog:
             self._launcher.stop()
             self.config.wallpaper = new_wallpaper
             self._launcher.start()
+            logger.info("[Switch] Wallpaper %s started successfully", new_wallpaper)
         finally:
             with self._switching_lock:
                 self._is_switching = False
