@@ -1,2 +1,32 @@
-.mypy_cache/\n__pycache__/\n*.log\n*.toml\n!wallpaper_manager.toml\n.vscode/\n
+# Python
 __pycache__/
+*.py[cod]
+*$py.class
+.mypy_cache/
+.pytest_cache/
+.venv/
+venv/
+env/
+
+
+# Node
+node_modules/
+package-lock.json
+
+# Logs & Databases
+*.log
+*.sqlite3
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Secrets & Configs
+.env
+.env.*
+*.pem
+config/config.json
+*.toml
+!wallpaper_manager.toml

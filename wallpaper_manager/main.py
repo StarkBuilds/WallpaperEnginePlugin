@@ -32,6 +32,7 @@ from wallpaper_manager.config import (
     load_config,
     validate_config,
 )
+from wallpaper_manager.launcher import WallpaperLauncher
 from wallpaper_manager.watchdog import Watchdog
 
 

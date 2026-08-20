@@ -13,10 +13,13 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu, QDialog, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QCheckBox, QComboBox, QLineEdit, QColorDialog, 
-    QScrollArea, QWidget, QFormLayout, QFrame
+    QScrollArea, QWidget, QFormLayout
 )
 from PyQt6.QtGui import QIcon, QAction, QColor
 from PyQt6.QtCore import QTimer, Qt
+
+from wallpaper_manager.config import Config, save_config
+from wallpaper_manager.watchdog import Watchdog
 
 logger = logging.getLogger(__name__)
 
@@ -125,18 +128,18 @@ class TrayApp:
 
     def toggle_pause(self):
         """Send SIGSTOP or SIGCONT to the linux-wallpaperengine process."""
-        process = self.watchdog.launcher._process
-        if not process:
+        proc = self.watchdog.launcher._process
+        if proc is None:
             logger.warning("Cannot pause: wallpaper engine is not running.")
             return
             
         try:
             if self._is_paused:
-                os.kill(process.pid, signal.SIGCONT)
+                os.kill(proc.pid, signal.SIGCONT)
                 self._is_paused = False
                 logger.info("Resumed wallpaper engine")
             else:
-                os.kill(process.pid, signal.SIGSTOP)
+                os.kill(proc.pid, signal.SIGSTOP)
                 self._is_paused = True
                 logger.info("Paused wallpaper engine")
         except ProcessLookupError:
@@ -183,7 +186,7 @@ class TrayApp:
                 current_idx = i
                 break
                 
-        next_idx = (current_idx + 1) % len(self.wallpapers)
+            next_idx = (current_idx + 1) % len(self.wallpapers)
         next_id = self.wallpapers[next_idx]['id']
         logger.info("Next wallpaper triggered: switching to %s", next_id)
         self.watchdog.switch_wallpaper(next_id)
@@ -206,7 +209,6 @@ class TrayApp:
             logger.info("[ConfigUI] Properties saved for %s: %s", wp_id, saved_props)
             
             # Save the new properties to disk
-            from wallpaper_manager.config import save_config
             save_config(self.watchdog.config)
             
             # Restart with the SAME wallpaper ID that was configured
@@ -223,7 +225,7 @@ class TrayApp:
 
 class ConfigDialog(QDialog):
     """Dynamic properties configuration window."""
-    def __init__(self, wp_id: str, config, parent=None):
+    def __init__(self, wp_id: str, config: Config, parent=None):
         super().__init__(parent)
         self.wp_id = wp_id
         self.config = config
@@ -233,10 +235,10 @@ class ConfigDialog(QDialog):
         # Make it stay on top so it doesn't get lost
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
         
-        self.layout = QVBoxLayout(self)
+        self.main_layout = QVBoxLayout(self)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
-        self.layout.addWidget(self.scroll)
+        self.main_layout.addWidget(self.scroll)
         
         self.content_widget = QWidget()
         self.form_layout = QFormLayout(self.content_widget)
@@ -256,7 +258,7 @@ class ConfigDialog(QDialog):
         btn_layout.addStretch()
         btn_layout.addWidget(cancel_btn)
         btn_layout.addWidget(save_btn)
-        self.layout.addLayout(btn_layout)
+        self.main_layout.addLayout(btn_layout)
 
     def _load_properties(self):
         """
@@ -289,22 +291,13 @@ class ConfigDialog(QDialog):
             return
         
         # ── Step 2: Parse the --list-properties output ───────────────
-        # Format:
-        #   propertyname - type
-        #       Text: Human Label
-        #       Value: default_value
-        #   Values:             (only for combo)
-        #           0 = Label
-        #           1 = Label
         props = {}
         current_key = None
         
         for line in raw_output.splitlines():
-            # Skip the "Running with:" and "Using wallpaper engine's assets" lines
             if line.startswith("Running with:") or line.startswith("Using wallpaper"):
                 continue
                 
-            # Property header: "backgroundcolor - color"
             header_match = re.match(r'^(\w+)\s*-\s*(\w+)', line)
             if header_match:
                 current_key = header_match.group(1)
@@ -317,14 +310,11 @@ class ConfigDialog(QDialog):
                 
             stripped = line.strip()
             
-            # Text line
             if stripped.startswith("Text:"):
                 props[current_key]["text"] = stripped[len("Text:"):].strip()
-            # Value line
             elif stripped.startswith("Value:"):
                 val_str = stripped[len("Value:"):].strip()
                 props[current_key]["value"] = val_str
-            # Combo option: "0 = Visualizer Mode"
             elif "=" in stripped and props[current_key]["type"] == "combo":
                 parts = stripped.split("=", 1)
                 if len(parts) == 2:
@@ -343,9 +333,7 @@ class ConfigDialog(QDialog):
             text = prop["text"]
             default_val = prop["value"]
             
-            # Apply user's saved override if it exists
             current_val = saved_props.get(key, default_val)
-            
             widget = None
             
             if prop_type == "boolean":
@@ -371,7 +359,6 @@ class ConfigDialog(QDialog):
             elif prop_type == "color":
                 widget = QPushButton()
                 try:
-                    # --list-properties outputs "R, G, B, A" with commas
                     parts = [float(x.strip().rstrip(',')) for x in str(current_val).replace(',', ' ').split()]
                     r = int(parts[0] * 255) if len(parts) > 0 else 0
                     g = int(parts[1] * 255) if len(parts) > 1 else 0
@@ -382,16 +369,15 @@ class ConfigDialog(QDialog):
                     
                 self._update_color_btn(widget, color)
                 
-                # Store the WE-format string for serialization
-                # Convert from comma format to space format for --set-property
                 try:
                     parts = [float(x.strip().rstrip(',')) for x in str(current_val).replace(',', ' ').split()]
-                    widget._we_color_string = " ".join(f"{p:.5f}" for p in parts[:3])
+                    we_str = " ".join(f"{p:.5f}" for p in parts[:3])
                 except Exception:
-                    widget._we_color_string = str(current_val)
+                    we_str = str(current_val)
                 
+                widget.setProperty("we_color", we_str)
                 widget.clicked.connect(lambda checked, btn=widget, c=color: self._pick_color(btn, c))
-                self.inputs[key] = lambda w=widget: w._we_color_string
+                self.inputs[key] = lambda w=widget: str(w.property("we_color") or "")
                 
             else:
                 widget = QLineEdit()
@@ -409,16 +395,15 @@ class ConfigDialog(QDialog):
         color = QColorDialog.getColor(initial, self, "Pick Color")
         if color.isValid():
             self._update_color_btn(btn, color)
-            # Wallpaper Engine format: "R G B" (0.0 - 1.0)
             we_format = f"{color.redF():.5f} {color.greenF():.5f} {color.blueF():.5f}"
-            btn._we_color_string = we_format
+            btn.setProperty("we_color", we_format)
             
     def _save_and_accept(self):
         """Read all inputs and save to config dict."""
         props = {}
         for key, getter in self.inputs.items():
             val = getter()
-            props[key] = str(val)  # Ensure everything is a string for TOML
+            props[key] = str(val)
             
         logger.info("[ConfigUI] Saving properties for %s: %s", self.wp_id, props)
             
@@ -429,7 +414,7 @@ class ConfigDialog(QDialog):
         self.accept()
 
 
-def run_gui(watchdog) -> None:
+def run_gui(watchdog: Watchdog) -> None:
     """
     Initializes the QApplication and the Tray App, then starts the event loop.
     Blocks until the app quits.
@@ -438,10 +423,7 @@ def run_gui(watchdog) -> None:
     
     import sys
     app = QApplication(sys.argv)
-    tray_app = TrayApp(watchdog, app)
-    
-    # We assign it to a local variable to prevent it from being garbage collected
-    # while the event loop is running.
+    _tray_app = TrayApp(watchdog, app)
     
     logger.info("Starting PyQt6 event loop...")
     app.exec()

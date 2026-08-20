@@ -127,7 +127,10 @@ class WallpaperLauncher:
         # Use override or resolve from config
         if wallpaper_override:
             self.config.wallpaper = wallpaper_override
-        wallpaper_path = self._resolve_wallpaper_path()
+        
+        # Prepare the wallpaper (sanitize/unpack)
+        from wallpaper_manager.sanitizer import prepare_wallpaper
+        wallpaper_path = prepare_wallpaper(self.config.workshop_dir, self.config.wallpaper)
         
         # The wallpaper folder name is the workshop ID
         wp_id = Path(wallpaper_path).name
@@ -144,9 +147,14 @@ class WallpaperLauncher:
         if self.config.silent:
             cmd.append("--silent")
 
-        # Wayland layer: 'background' sits BELOW KDE Plasma desktop icons.
-        # Default 'bottom' layer would cover desktop icons and block right-click.
-        cmd.extend(["--layer", "background"])
+        # Wayland layer: 'bottom' is the correct layer for KDE Plasma.
+        # 'background' is invisible on KDE because Plasma's desktop shell occupies it.
+        # On wlroots compositors (Sway, Hyprland), 'background' would work instead.
+        cmd.extend(["--layer", "bottom"])
+        
+        # Disable mouse input on the wallpaper surface so clicks pass through
+        # to the KDE desktop underneath (allows right-click menu + desktop icons)
+        cmd.append("--disable-mouse")
             
         # ── Wallpaper property overrides ─────────────────────────────
         # --set-property expects a SINGLE string: "key=value"
@@ -221,15 +229,13 @@ class WallpaperLauncher:
 
         Raises FileNotFoundError if the binary isn't found.
         """
-        if self.is_running():
+        if self._process is not None and self.is_running():
             logger.warning("Wallpaper engine is already running (PID %d).", self._process.pid)
             return
 
         cmd = self._build_command()
         env = self._build_env()
         
-        # BUG 1 FIX: Log the EXACT subprocess argument list for debugging.
-        # This lets us verify each argument is a separate, correct element.
         logger.info("Starting wallpaper engine: %s", " ".join(cmd))
         logger.debug("Subprocess argv (raw list): %r", cmd)
 
@@ -241,9 +247,10 @@ class WallpaperLauncher:
                 preexec_fn=os.setsid,
                 env=env,
             )
-            logger.info(
-                "Wallpaper engine started with PID %d.", self._process.pid
-            )
+            if self._process is not None:
+                logger.info(
+                    "Wallpaper engine started with PID %d.", self._process.pid
+                )
         except FileNotFoundError:
             logger.error("Binary not found: %s", cmd[0])
             raise
@@ -262,33 +269,28 @@ class WallpaperLauncher:
 
         Returns True if the process was stopped, False if nothing was running.
         """
-        if not self.is_running():
+        proc = self._process
+        if proc is None or not self.is_running():
             logger.info("No wallpaper engine process to stop.")
             return False
 
-        pid = self._process.pid
+        pid = proc.pid
         logger.info("Stopping wallpaper engine (PID %d)...", pid)
 
         try:
-            # Send SIGTERM to the entire process group (the engine + any
-            # children it may have spawned).
-            # os.killpg() sends to a process GROUP, not a single process.
             os.killpg(os.getpgid(pid), signal.SIGTERM)
 
-            # Wait up to 5 seconds for clean exit
             try:
-                self._process.wait(timeout=5)
+                proc.wait(timeout=5)
                 logger.info("Wallpaper engine stopped gracefully.")
             except subprocess.TimeoutExpired:
-                # Still running after 5s — force kill
                 logger.warning(
                     "Wallpaper engine didn't stop in 5s — sending SIGKILL."
                 )
                 os.killpg(os.getpgid(pid), signal.SIGKILL)
-                self._process.wait(timeout=3)
+                proc.wait(timeout=3)
                 logger.info("Wallpaper engine force-killed.")
         except ProcessLookupError:
-            # Process already exited between our check and the kill
             logger.info("Process already exited.")
         except Exception:
             logger.exception("Error stopping wallpaper engine.")
@@ -325,24 +327,17 @@ class WallpaperLauncher:
         """
         Read any available stdout/stderr from the process.
         Returns empty string if no output or process not running.
-
-        Note: This reads what's currently buffered. For a long-running
-        process, you'd want to read this periodically (which the watchdog
-        will do in Stage 3).
         """
-        if self._process is None or self._process.stdout is None:
+        proc = self._process
+        if proc is None or proc.stdout is None:
             return ""
 
         try:
-            # Read available output without blocking
-            # We use os.read() on the file descriptor for non-blocking reads
             import select
 
-            # select.select() checks if data is available to read.
-            # timeout=0 means "don't wait, just check right now".
-            ready, _, _ = select.select([self._process.stdout], [], [], 0)
+            ready, _, _ = select.select([proc.stdout], [], [], 0)
             if ready:
-                data = self._process.stdout.read1(4096)  # read up to 4KB
+                data = proc.stdout.read(4096)
                 if data:
                     return data.decode("utf-8", errors="replace")
         except Exception:

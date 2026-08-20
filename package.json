@@ -1,0 +1,9 @@
+{
+  "name": "we-sanitizer",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@babel/core": "^7.23.0",
+    "@babel/preset-env": "^7.23.0"
+  }
+}
