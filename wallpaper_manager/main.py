@@ -210,7 +210,7 @@ def main() -> None:
     watchdog = Watchdog(config)
 
     try:
-        watchdog.start()
+        watchdog.start(auto_launch=config.auto_start_on_mount)
     except FileNotFoundError:
         logger.error(
             "linux-wallpaperengine not found. Install it with:\n"
@@ -259,12 +259,15 @@ def main() -> None:
     signal.signal(signal.SIGINT, handle_shutdown)
     signal.signal(signal.SIGTERM, handle_shutdown)
 
-    logger.info("Wallpaper engine is running (with crash resilience). Press Ctrl+C to stop.")
-    logger.info(
-        "Crash policy: max %d retries, %ds delay between restarts.",
-        config.resilience.max_retries,
-        config.resilience.retry_delay_seconds,
-    )
+    if not config.auto_start_on_mount:
+        logger.info("Auto-start disabled. Use the GUI or tray menu to start a wallpaper.")
+    else:
+        logger.info("Wallpaper engine is running (with crash resilience). Press Ctrl+C to stop.")
+        logger.info(
+            "Crash policy: max %d retries, %ds delay between restarts.",
+            config.resilience.max_retries,
+            config.resilience.retry_delay_seconds,
+        )
     logger.info("Logs: %s", LOG_FILE)
 
     # ── Hook the PyQt6 GUI Event Loop (Stage 5) ──────────────────

@@ -83,6 +83,14 @@ function walk(obj) {
                     obj[key] = newCode;
                     modified = true;
                 }
+            } else if (typeof obj[key] === 'string' && obj[key].match(/\.(ttf|otf)$/i)) {
+                const path = require('path');
+                const cacheDir = path.dirname(file);
+                const absoluteFont = path.resolve(cacheDir, obj[key]);
+                if (obj[key] !== absoluteFont) {
+                    obj[key] = absoluteFont;
+                    modified = true;
+                }
             } else {
                 walk(obj[key]);
             }

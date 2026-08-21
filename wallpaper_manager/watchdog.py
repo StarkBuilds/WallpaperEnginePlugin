@@ -94,6 +94,7 @@ class Watchdog:
         # Concurrency control for switching wallpapers
         self._switching_lock = threading.Lock()
         self._is_switching = False
+        self._is_paused = False
 
         # Retry settings from config
         self._max_retries = config.resilience.max_retries
@@ -104,7 +105,7 @@ class Watchdog:
         """Expose the launcher for output reading etc."""
         return self._launcher
 
-    def start(self) -> None:
+    def start(self, auto_launch: bool = True) -> None:
         """
         Start the wallpaper engine and begin monitoring.
 
@@ -114,8 +115,12 @@ class Watchdog:
         """
         logger.info("Watchdog starting up...")
 
-        # Initial launch — let exceptions propagate to caller
-        self._launcher.start()
+        if auto_launch:
+            # Initial launch — let exceptions propagate to caller
+            self._launcher.start()
+        else:
+            logger.info("Auto-start disabled by config. Waiting for user action.")
+            self._is_paused = True
 
         # Start monitoring in background
         self._monitor_thread = threading.Thread(
@@ -173,6 +178,7 @@ class Watchdog:
         
         with self._switching_lock:
             self._is_switching = True
+            self._is_paused = False
             
         try:
             self._launcher.stop()
@@ -198,6 +204,11 @@ class Watchdog:
         last_start_time = time.monotonic()
 
         while not self._stop_event.is_set():
+            # Check if paused (e.g. auto-start disabled on mount)
+            if self._is_paused:
+                self._stop_event.wait(timeout=1.0)
+                continue
+
             # Check process health every second
             if self._launcher.is_running():
                 self._stop_event.wait(timeout=1.0)

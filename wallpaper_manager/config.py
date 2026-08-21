@@ -113,6 +113,9 @@ class Config:
     silent: bool = False
     """Mute all wallpaper audio."""
 
+    auto_start_on_mount: bool = True
+    """Whether to automatically start the wallpaper engine when the drive is mounted."""
+
 
 def load_config(path: Path = CONFIG_FILE) -> Config:
     """
@@ -176,6 +179,7 @@ def load_config(path: Path = CONFIG_FILE) -> Config:
         properties=raw.get("properties", {}),
         disable_gl_threaded_optimizations=raw.get("disable_gl_threaded_optimizations", False),
         silent=raw.get("silent", False),
+        auto_start_on_mount=raw.get("auto_start_on_mount", True),
     )
 
     # Auto-detect any paths the user didn't explicitly set
@@ -196,6 +200,7 @@ def save_config(config: Config, path: Path = CONFIG_FILE) -> None:
         f'fps = {config.fps}',
         f'disable_gl_threaded_optimizations = {"true" if config.disable_gl_threaded_optimizations else "false"}',
         f'silent = {"true" if config.silent else "false"}',
+        f'auto_start_on_mount = {"true" if config.auto_start_on_mount else "false"}',
         '',
         '[drive]',
         f'uuid = "{config.drive.uuid}"',

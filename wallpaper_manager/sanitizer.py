@@ -51,10 +51,15 @@ def sanitize_json_files(target_dir: Path) -> None:
     # We locate sanitizer.js in the project root
     project_root = Path(__file__).parent.parent
     sanitizer_js = project_root / "sanitizer.js"
-    node_bin = Path("/tmp/node-v20.11.1-linux-x64/bin/node")
+    import shutil as _shutil
+    node_bin_str = _shutil.which("node")
+    if not node_bin_str:
+        node_bin = Path("/tmp/node-v20.11.1-linux-x64/bin/node")  # legacy fallback
+    else:
+        node_bin = Path(node_bin_str)
     
     if not node_bin.exists():
-        logger.warning("Node.js not found at %s. Skipping sanitization.", node_bin)
+        logger.warning("Node.js not found on $PATH or at legacy path. Skipping sanitization. Install with: sudo pacman -S nodejs")
         return
         
     if not sanitizer_js.exists():

@@ -108,6 +108,11 @@ class WallpaperLauncher:
         """
         # Verify the binary exists and is executable
         binary = self.config.binary
+        
+        # Hardcode the absolute path for systemd service if using default
+        if binary == "linux-wallpaperengine":
+            binary = os.path.expanduser("~/.gemini/antigravity-ide/bin/linux-wallpaperengine")
+
         if not Path(binary).is_absolute():
             # It's a name like "linux-wallpaperengine" — check $PATH
             resolved = shutil.which(binary)
@@ -157,11 +162,65 @@ class WallpaperLauncher:
         cmd.append("--disable-mouse")
             
         # ── Wallpaper property overrides ─────────────────────────────
-        # --set-property expects a SINGLE string: "key=value"
-        # For color values with spaces like "0 0 0", the entire "key=0 0 0"
-        # must be ONE element in the subprocess args list.
-        wp_props = self.config.properties.get(wp_id, {})
-        for key, val in wp_props.items():
+        # Strategy: read default values from project.json → general.properties,
+        # then overlay any user-saved overrides from config.properties[wp_id].
+        # This ensures properties like schemecolor (yellow theme) and 
+        # clock24hversion (24H clock) render correctly on FIRST load without
+        # requiring the user to manually open the config dialog.
+        
+        # Step 1: Read defaults and types from project.json
+        default_props = {}
+        prop_types = {}
+        original_wp_dir = Path(self.config.workshop_dir) / self.config.wallpaper
+        project_json = original_wp_dir / "project.json"
+        if project_json.is_file():
+            try:
+                import json
+                data = json.loads(project_json.read_text("utf-8"))
+                general_props = data.get("general", {}).get("properties", {})
+                for key, prop_def in general_props.items():
+                    prop_types[key] = prop_def.get("type")
+                    if "value" in prop_def:
+                        val = prop_def["value"]
+                        if isinstance(val, bool):
+                            default_props[key] = "1" if val else "0"
+                        else:
+                            default_props[key] = str(val)
+                if default_props:
+                    logger.debug("Read %d default properties from project.json", len(default_props))
+            except Exception as e:
+                logger.warning("Failed to read project.json defaults: %s", e)
+        
+        # Step 2: Overlay user-saved overrides (these take priority)
+        user_props = self.config.properties.get(wp_id, {})
+        merged_props = {**default_props, **user_props}
+        
+        # Step 3: Normalize and pass properties to the engine
+        def _normalize_color(val: str) -> str:
+            # linux-wallpaperengine requires colors as normalized floats "R G B" (0.0 to 1.0)
+            val = val.strip()
+            if val.startswith("#"):
+                val = val.lstrip("#")
+                if len(val) == 6:
+                    r, g, b = int(val[0:2], 16), int(val[2:4], 16), int(val[4:6], 16)
+                    return f"{r/255.0:.5f} {g/255.0:.5f} {b/255.0:.5f}"
+            
+            parts = [x for x in val.replace(',', ' ').split() if x.strip()]
+            if len(parts) >= 3:
+                try:
+                    fparts = [float(p) for p in parts[:3]]
+                    # If they look like 0-255 ints, convert them
+                    if any(p > 1.0 for p in fparts):
+                        return f"{fparts[0]/255.0:.5f} {fparts[1]/255.0:.5f} {fparts[2]/255.0:.5f}"
+                    return f"{fparts[0]:.5f} {fparts[1]:.5f} {fparts[2]:.5f}"
+                except ValueError:
+                    pass
+            return val
+
+        for key, val in merged_props.items():
+            if prop_types.get(key) == "color":
+                val = _normalize_color(str(val))
+            
             prop_str = f"{key}={val}"
             cmd.extend(["--set-property", prop_str])
             logger.debug("  property override: --set-property %s", prop_str)
